@@ -254,3 +254,146 @@ def analyze(request: AnalyzeRequest):
             decision.reason
         ),
     }
+    
+
+@router.post("/recover")
+def recover(request: AnalyzeRequest):
+
+    # --------------------------------------------------
+    # 1. BUILD FEATURES
+    # --------------------------------------------------
+
+    features = {
+        "amount": request.amount,
+        "payment_method": request.payment_method,
+        "failure_reason": request.failure_reason,
+        "customer_lifetime_value": (
+            request.customer_lifetime_value
+        ),
+        "previous_payment_count": (
+            request.previous_payment_count
+        ),
+        "previous_success_count": (
+            request.previous_success_count
+        ),
+        "previous_failure_count": (
+            request.previous_failure_count
+        ),
+        "previous_average_amount": (
+            request.previous_average_amount
+        ),
+        "customer_success_rate": (
+            request.previous_success_count
+            / request.previous_payment_count
+            if request.previous_payment_count > 0
+            else 0
+        ),
+        "amount_vs_customer_average": (
+            request.amount
+            / request.previous_average_amount
+            if request.previous_average_amount > 0
+            else 1
+        ),
+        "recent_failure_count": (
+            request.recent_failure_count
+        ),
+    }
+
+    # --------------------------------------------------
+    # 2. AI PREDICTION
+    # --------------------------------------------------
+
+    recovery_probability = (
+        model_service.predict_probability(
+            features
+        )
+    )
+
+    expected_recovery_value = round(
+        request.amount
+        * recovery_probability,
+        2,
+    )
+
+    # --------------------------------------------------
+    # 3. DECISION ENGINE
+    # --------------------------------------------------
+
+    decision = decide_recovery_action(
+        amount=request.amount,
+        recovery_probability=recovery_probability,
+        failure_reason=request.failure_reason,
+        previous_attempts=0,
+        customer_lifetime_value=(
+            request.customer_lifetime_value
+        ),
+    )
+
+    # --------------------------------------------------
+    # 4. RECOVERY SIMULATION
+    # --------------------------------------------------
+
+    simulation = simulate_recovery(
+        payment_id=request.payment_id,
+        amount=request.amount,
+        recovery_probability=recovery_probability,
+        failure_reason=request.failure_reason,
+    )
+
+    # --------------------------------------------------
+    # 5. FINAL RESPONSE
+    # --------------------------------------------------
+
+    return {
+        "payment_id": request.payment_id,
+        "amount": request.amount,
+
+        "ai_analysis": {
+            "recovery_probability": (
+                recovery_probability
+            ),
+            "expected_recovery_value": (
+                expected_recovery_value
+            ),
+        },
+
+        "decision": {
+            "recommended_action": (
+                decision.action
+            ),
+            "confidence": (
+                decision.confidence
+            ),
+            "reason": (
+                decision.reason
+            ),
+        },
+
+        "simulation": {
+            "final_status": (
+                simulation.final_status
+            ),
+            "total_recovered": (
+                simulation.total_recovered
+            ),
+            "attempts": [
+                {
+                    "attempt_number": (
+                        attempt.attempt_number
+                    ),
+                    "action": attempt.action,
+                    "probability": (
+                        attempt.probability
+                    ),
+                    "expected_value": (
+                        attempt.expected_value
+                    ),
+                    "successful": (
+                        attempt.successful
+                    ),
+                }
+                for attempt
+                in simulation.attempts
+            ],
+        },
+    }
