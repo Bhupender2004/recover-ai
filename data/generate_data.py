@@ -32,18 +32,12 @@ FAILURE_REASONS = [
 
 
 def create_customers():
+
     customers = []
 
     for i in range(NUM_CUSTOMERS):
 
         customer_id = f"CUST{i + 1:05d}"
-
-        # Each customer has a different natural
-        # payment reliability.
-        customer_reliability = random.uniform(
-            0.55,
-            0.98
-        )
 
         customers.append({
             "customer_id": customer_id,
@@ -53,53 +47,53 @@ def create_customers():
                 random.uniform(5000, 500000),
                 2
             ),
-            "customer_reliability": customer_reliability,
+
+            # Hidden variable used only to create
+            # realistic synthetic behavior.
+            "customer_reliability": random.uniform(
+                0.55,
+                0.98
+            ),
         })
 
     return customers
 
 
 def calculate_recovery_probability(
-    customer_reliability,
-    amount,
-    average_amount,
+    reliability,
+    customer_success_rate,
+    previous_failures,
     recent_failures,
+    amount_ratio,
     failure_reason,
 ):
-    """
-    Estimate the natural probability that a failed
-    payment can eventually be recovered.
 
-    IMPORTANT:
-    This does NOT depend on recovery_action.
-
-    That allows our ML model to learn meaningful
-    relationships between customer/payment behavior
-    and recovery outcome.
-    """
-
-    probability = customer_reliability
-
-    # Payment size relative to customer's normal
-    # payment size.
-    amount_ratio = amount / max(
-        average_amount,
-        1
+    probability = (
+        0.25
+        + 0.35 * customer_success_rate
+        + 0.20 * reliability
     )
 
-    if amount_ratio <= 1.2:
-        probability += 0.05
+    # Repeated failures reduce recovery likelihood.
+    probability -= (
+        previous_failures * 0.025
+    )
 
-    elif amount_ratio >= 2.0:
+    probability -= (
+        recent_failures * 0.04
+    )
+
+    # Payments significantly above normal amount
+    # are harder to recover.
+    if amount_ratio > 2.0:
         probability -= 0.12
 
-    # Recent failures indicate increasing payment
-    # difficulty.
-    probability -= (
-        recent_failures * 0.035
-    )
+    elif amount_ratio > 1.5:
+        probability -= 0.06
 
-    # Failure reason influences recoverability.
+    elif amount_ratio <= 1.2:
+        probability += 0.04
+
     failure_adjustments = {
         "timeout": 0.08,
         "network_error": 0.07,
@@ -121,98 +115,136 @@ def calculate_recovery_probability(
 
 def choose_recovery_action(
     recovery_probability,
-    failure_reason
+    failure_reason,
 ):
-    """
-    Recovery policy used by the application.
-
-    This is separate from the recovery outcome.
-    """
 
     if recovery_probability >= 0.80:
 
         if failure_reason in [
             "timeout",
-            "network_error"
+            "network_error",
         ]:
             return "retry"
 
         return "payment_link"
 
-    elif recovery_probability >= 0.60:
-
+    if recovery_probability >= 0.60:
         return "reminder"
 
-    elif recovery_probability >= 0.40:
-
+    if recovery_probability >= 0.40:
         return "payment_link"
 
-    else:
-
-        return "escalate"
+    return "escalate"
 
 
 def create_payments(customers):
 
     payments = []
 
-    start_date = (
-        datetime.now()
-        - timedelta(days=180)
-    )
+    # Create a chronological event queue.
+    #
+    # Each customer gets a number of payments,
+    # and each customer's dates are generated in
+    # chronological order.
 
-    # Maintain a small amount of historical
-    # information for each customer.
-    customer_history = {}
+    customer_events = []
 
     for customer in customers:
 
-        customer_history[
+        num_customer_payments = random.randint(
+            5,
+            15
+        )
+
+        current_date = (
+            datetime.now()
+            - timedelta(days=180)
+        )
+
+        for _ in range(
+            num_customer_payments
+        ):
+
+            current_date += timedelta(
+                days=random.randint(
+                    2,
+                    12
+                )
+            )
+
+            customer_events.append({
+                "customer": customer,
+                "payment_date": current_date,
+            })
+
+    # Sort ALL events chronologically.
+    customer_events.sort(
+        key=lambda x: x["payment_date"]
+    )
+
+    # Keep historical state for each customer.
+    history = {}
+
+    for customer in customers:
+
+        history[
             customer["customer_id"]
         ] = {
-            "payments": [],
-            "successful_payments": [],
-            "failed_payments": [],
+            "amounts": [],
+            "successes": 0,
+            "failures": 0,
+            "failure_dates": [],
+            "last_success_date": None,
         }
 
-    for i in range(NUM_PAYMENTS):
+    payment_counter = 1
 
-        customer = random.choice(customers)
+    for event in customer_events:
+
+        customer = event["customer"]
+        payment_date = event["payment_date"]
 
         customer_id = customer["customer_id"]
 
-        history = customer_history[
+        customer_history = history[
             customer_id
         ]
 
-        # Generate amount around the customer's
-        # historical average when possible.
-        if history["payments"]:
+        previous_amounts = (
+            customer_history["amounts"]
+        )
+
+        # ------------------------------------------
+        # Amount generation
+        # ------------------------------------------
+
+        if previous_amounts:
 
             average_amount = sum(
-                history["payments"]
-            ) / len(
-                history["payments"]
-            )
+                previous_amounts
+            ) / len(previous_amounts)
 
             amount = random.gauss(
                 average_amount,
                 max(
-                    average_amount * 0.30,
+                    average_amount * 0.25,
                     200
                 )
             )
 
             amount = max(
                 200,
-                min(amount, 50000)
+                min(
+                    amount,
+                    50000
+                )
             )
 
         else:
 
             amount = random.uniform(
-                200,
-                25000
+                500,
+                20000
             )
 
             average_amount = amount
@@ -222,22 +254,79 @@ def create_payments(customers):
             2
         )
 
+        # ------------------------------------------
+        # Payment method
+        # ------------------------------------------
+
         payment_method = random.choice(
             PAYMENT_METHODS
         )
 
-        # Customer reliability influences the
-        # probability of a successful payment.
+        # ------------------------------------------
+        # Historical features BEFORE payment
+        # ------------------------------------------
+
+        previous_payment_count = len(
+            previous_amounts
+        )
+
+        previous_success_count = (
+            customer_history["successes"]
+        )
+
+        previous_failure_count = (
+            customer_history["failures"]
+        )
+
+        if previous_payment_count > 0:
+
+            customer_success_rate = (
+                previous_success_count
+                / previous_payment_count
+            )
+
+        else:
+
+            # Cold-start assumption.
+            customer_success_rate = (
+                customer["customer_reliability"]
+            )
+
+        amount_ratio = (
+            amount
+            / max(
+                average_amount,
+                1
+            )
+        )
+
+        recent_failure_count = sum(
+            1
+            for date in
+            customer_history["failure_dates"]
+            if (
+                payment_date - date
+            ).days <= 30
+        )
+
+        # ------------------------------------------
+        # Determine payment status
+        # ------------------------------------------
+
         success_probability = (
             customer["customer_reliability"]
         )
 
-        # Small randomness based on payment method.
         if payment_method == "upi":
             success_probability += 0.02
 
-        elif payment_method == "card":
+        if payment_method == "card":
             success_probability -= 0.01
+
+        # Large unusual payments are slightly
+        # more likely to fail.
+        if amount_ratio > 2:
+            success_probability -= 0.05
 
         success_probability = max(
             0.40,
@@ -249,7 +338,8 @@ def create_payments(customers):
 
         status = (
             "success"
-            if random.random() < success_probability
+            if random.random()
+            < success_probability
             else "failed"
         )
 
@@ -258,29 +348,34 @@ def create_payments(customers):
         recovered = False
         recovered_amount = 0.0
 
+        # ------------------------------------------
+        # Recovery logic
+        # ------------------------------------------
+
         if status == "failed":
 
             failure_reason = random.choice(
                 FAILURE_REASONS
             )
 
-            recent_failures = len(
-                history["failed_payments"][-3:]
-            )
-
             recovery_probability = (
                 calculate_recovery_probability(
-                    customer_reliability=(
+                    reliability=(
                         customer[
                             "customer_reliability"
                         ]
                     ),
-                    amount=amount,
-                    average_amount=(
-                        average_amount
+                    customer_success_rate=(
+                        customer_success_rate
+                    ),
+                    previous_failures=(
+                        previous_failure_count
                     ),
                     recent_failures=(
-                        recent_failures
+                        recent_failure_count
+                    ),
+                    amount_ratio=(
+                        amount_ratio
                     ),
                     failure_reason=(
                         failure_reason
@@ -288,18 +383,13 @@ def create_payments(customers):
                 )
             )
 
-            # Choose action based on information
-            # available at the time of failure.
             recovery_action = (
                 choose_recovery_action(
                     recovery_probability,
-                    failure_reason
+                    failure_reason,
                 )
             )
 
-            # Recovery outcome is based on the
-            # underlying recovery probability,
-            # NOT directly on the action.
             recovered = (
                 random.random()
                 < recovery_probability
@@ -308,34 +398,34 @@ def create_payments(customers):
             if recovered:
                 recovered_amount = amount
 
-            history[
-                "failed_payments"
-            ].append(amount)
+            customer_history[
+                "failures"
+            ] += 1
+
+            customer_history[
+                "failure_dates"
+            ].append(
+                payment_date
+            )
 
         else:
 
-            history[
-                "successful_payments"
-            ].append(amount)
+            customer_history[
+                "successes"
+            ] += 1
 
-        history[
-            "payments"
+            customer_history[
+                "last_success_date"
+            ] = payment_date
+
+        customer_history[
+            "amounts"
         ].append(amount)
-
-        payment_date = (
-            start_date
-            + timedelta(
-                days=random.randint(
-                    0,
-                    180
-                )
-            )
-        )
 
         payments.append({
 
             "payment_id":
-                f"PAY{i + 1:06d}",
+                f"PAY{payment_counter:06d}",
 
             "customer_id":
                 customer_id,
@@ -365,6 +455,11 @@ def create_payments(customers):
                 recovered_amount,
         })
 
+        payment_counter += 1
+
+        if payment_counter > NUM_PAYMENTS:
+            break
+
     return payments
 
 
@@ -374,7 +469,7 @@ def main():
 
     customers = create_customers()
 
-    print("Generating payments...")
+    print("Generating chronological payments...")
 
     payments = create_payments(
         customers
@@ -407,30 +502,33 @@ def main():
         index=False
     )
 
+    failed = payments_df[
+        payments_df["status"] == "failed"
+    ]
+
     print()
     print(
         "Dataset generation complete!"
     )
 
     print(
-        f"Customers: "
-        f"{len(customers_df)}"
+        f"Customers: {len(customers_df)}"
     )
 
     print(
-        f"Payments: "
-        f"{len(payments_df)}"
+        f"Payments: {len(payments_df)}"
     )
 
     print(
-        f"Failed payments: "
-        f"{(payments_df['status'] == 'failed').sum()}"
+        f"Failed payments: {len(failed)}"
     )
 
-    print(
-        f"Recovery rate: "
-        f"{payments_df.loc[payments_df['status'] == 'failed', 'recovered'].mean() * 100:.2f}%"
-    )
+    if len(failed) > 0:
+
+        print(
+            f"Recovery rate: "
+            f"{failed['recovered'].mean() * 100:.2f}%"
+        )
 
     print()
     print(
