@@ -16,6 +16,24 @@ type AnalysisResult = {
   reason: string;
 };
 
+function isAnalysisResult(data: unknown): data is AnalysisResult {
+  if (typeof data !== "object" || data === null) {
+    return false;
+  }
+
+  const value = data as Record<string, unknown>;
+
+  return (
+    typeof value.payment_id === "string" &&
+    typeof value.amount === "number" &&
+    typeof value.recovery_probability === "number" &&
+    typeof value.expected_recovery_value === "number" &&
+    typeof value.recommended_action === "string" &&
+    typeof value.confidence === "string" &&
+    typeof value.reason === "string"
+  );
+}
+
 export default function Home() {
   const [form, setForm] = useState({
     payment_id: "PAY_DEMO_001",
@@ -44,10 +62,132 @@ export default function Home() {
     }));
   }
 
+  function validateForm() {
+    const amount = Number(form.amount);
+    const lifetimeValue = Number(form.customer_lifetime_value);
+    const previousPayments = Number(form.previous_payment_count);
+    const successfulPayments = Number(form.previous_success_count);
+    const failedPayments = Number(form.previous_failure_count);
+    const averageAmount = Number(form.previous_average_amount);
+    const recentFailures = Number(form.recent_failure_count);
+
+    if (!form.payment_id.trim()) {
+      return "Payment ID is required.";
+    }
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return "Payment amount must be greater than ₹0.";
+    }
+
+    if (!Number.isFinite(lifetimeValue) || lifetimeValue < 0) {
+      return "Customer lifetime value cannot be negative.";
+    }
+
+    if (!Number.isInteger(previousPayments) || previousPayments < 0) {
+      return "Previous payments must be a non-negative whole number.";
+    }
+
+    if (!Number.isInteger(successfulPayments) || successfulPayments < 0) {
+      return "Previous successful payments must be a non-negative whole number.";
+    }
+
+    if (!Number.isInteger(failedPayments) || failedPayments < 0) {
+      return "Previous failed payments must be a non-negative whole number.";
+    }
+
+    if (!Number.isFinite(averageAmount) || averageAmount < 0) {
+      return "Previous average amount cannot be negative.";
+    }
+
+    if (!Number.isInteger(recentFailures) || recentFailures < 0) {
+      return "Recent failure count must be a non-negative whole number.";
+    }
+
+    if (
+      successfulPayments + failedPayments >
+      previousPayments
+    ) {
+      return (
+        "Previous successful and failed payments cannot exceed total previous payments."
+      );
+    }
+
+    return null;
+  }
+
+  function getApiErrorMessage(data: unknown) {
+    if (
+      typeof data === "object" &&
+      data !== null &&
+      "detail" in data &&
+      Array.isArray(data.detail)
+    ) {
+      const fieldNames: Record<string, string> = {
+        payment_id: "Payment ID",
+        amount: "Payment amount",
+        payment_method: "Payment method",
+        failure_reason: "Failure reason",
+        customer_lifetime_value: "Customer lifetime value",
+        previous_payment_count: "Previous payments",
+        previous_success_count: "Previous successful payments",
+        previous_failure_count: "Previous failed payments",
+        previous_average_amount: "Previous average amount",
+        recent_failure_count: "Recent failure count",
+      };
+
+      return data.detail
+        .map((item: unknown) => {
+          const itemData =
+            typeof item === "object" && item !== null ? item : null;
+          const location =
+            itemData && "loc" in itemData && Array.isArray(itemData.loc)
+              ? itemData.loc
+              : [];
+          const field = location[1];
+          const fieldName = fieldNames[field] || "Input";
+          const message =
+            itemData && "msg" in itemData && typeof itemData.msg === "string"
+              ? itemData.msg
+              : "contains an invalid value.";
+
+          return `${fieldName}: ${message}`;
+        })
+        .join("\n");
+    }
+
+    if (
+      typeof data === "object" &&
+      data !== null &&
+      "detail" in data &&
+      typeof data.detail === "string"
+    ) {
+      return data.detail;
+    }
+
+    if (
+      typeof data === "object" &&
+      data !== null &&
+      "message" in data &&
+      typeof data.message === "string"
+    ) {
+      return data.message;
+    }
+
+    return "Unable to analyze the payment. Please check the entered details.";
+  }
+
   async function analyzePayment() {
-    setLoading(true);
     setError("");
     setResult(null);
+
+    const validationError = validateForm();
+
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    setLoading(true);
 
     try {
       const response = await fetch(
@@ -58,7 +198,7 @@ export default function Home() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            payment_id: form.payment_id,
+            payment_id: form.payment_id.trim(),
             amount: Number(form.amount),
             payment_method: form.payment_method,
             failure_reason: form.failure_reason,
@@ -78,27 +218,37 @@ export default function Home() {
         }
       );
 
-      if (!response.ok) {
-        const errorData = await response.json();
+      let data: unknown = null;
 
-        throw new Error(
-          errorData.detail
-            ? JSON.stringify(errorData.detail)
-            : "Unable to analyze payment."
-        );
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
       }
 
-      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(data));
+      }
+
+      if (!isAnalysisResult(data)) {
+        throw new Error("The API returned an invalid analysis result.");
+      }
 
       setResult(data);
     } catch (err) {
       console.error(err);
 
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Something went wrong while connecting to RecoverAI."
-      );
+      if (err instanceof TypeError) {
+        setError(
+          "Unable to connect to RecoverAI API. Please try again in a few seconds."
+        );
+      } else if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError(
+          "Something went wrong while analyzing the payment."
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -220,6 +370,8 @@ export default function Home() {
             <InputField
               label="Payment Amount (₹)"
               type="number"
+              min="0.01"
+              step="0.01"
               value={form.amount}
               onChange={(value) =>
                 updateField("amount", value)
@@ -271,6 +423,8 @@ export default function Home() {
             <InputField
               label="Customer Lifetime Value (₹)"
               type="number"
+              min="0"
+              step="0.01"
               value={form.customer_lifetime_value}
               onChange={(value) =>
                 updateField(
@@ -283,6 +437,8 @@ export default function Home() {
             <InputField
               label="Previous Payments"
               type="number"
+              min="0"
+              step="1"
               value={form.previous_payment_count}
               onChange={(value) =>
                 updateField(
@@ -301,6 +457,8 @@ export default function Home() {
             <InputField
               label="Previous Successful Payments"
               type="number"
+              min="0"
+              step="1"
               value={form.previous_success_count}
               onChange={(value) =>
                 updateField(
@@ -313,6 +471,8 @@ export default function Home() {
             <InputField
               label="Previous Failed Payments"
               type="number"
+              min="0"
+              step="1"
               value={form.previous_failure_count}
               onChange={(value) =>
                 updateField(
@@ -325,6 +485,8 @@ export default function Home() {
             <InputField
               label="Previous Average Amount (₹)"
               type="number"
+              min="0"
+              step="0.01"
               value={form.previous_average_amount}
               onChange={(value) =>
                 updateField(
@@ -343,6 +505,8 @@ export default function Home() {
             <InputField
               label="Recent Failure Count"
               type="number"
+              min="0"
+              step="1"
               value={form.recent_failure_count}
               onChange={(value) =>
                 updateField(
@@ -494,11 +658,15 @@ function InputField({
   value,
   onChange,
   type = "text",
+  min,
+  step,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   type?: string;
+  min?: string;
+  step?: string;
 }) {
   return (
     <div>
@@ -509,6 +677,8 @@ function InputField({
 
       <input
         type={type}
+        min={min}
+        step={step}
         value={value}
         onChange={(e) =>
           onChange(e.target.value)
