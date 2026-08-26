@@ -17,7 +17,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "https://recover-ai-lac.vercel.app/",
+        "https://recover-ai-lac.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
