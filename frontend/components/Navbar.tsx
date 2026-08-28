@@ -53,6 +53,12 @@ export function Navbar() {
             Payments Queue
           </button>
           <button
+            onClick={() => scrollTo("who-benefits")}
+            className="px-3.5 py-1.5 rounded-lg hover:text-white hover:bg-slate-900/80 transition-colors"
+          >
+            Who Benefits
+          </button>
+          <button
             onClick={() => scrollTo("business-value")}
             className="px-3.5 py-1.5 rounded-lg hover:text-white hover:bg-slate-900/80 transition-colors"
           >

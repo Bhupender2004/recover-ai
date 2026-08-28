@@ -6,6 +6,7 @@ import { Hero } from "../components/Hero";
 import { ExecutiveMetrics } from "../components/ExecutiveMetrics";
 import { PaymentAnalyzer } from "../components/PaymentAnalyzer";
 import { PrioritizedPaymentsTable } from "../components/PrioritizedPaymentsTable";
+import { WhoBenefits } from "../components/WhoBenefits";
 import { BusinessValue } from "../components/BusinessValue";
 import { HowItWorks } from "../components/HowItWorks";
 import { EnterpriseTrust } from "../components/EnterpriseTrust";
@@ -31,6 +32,9 @@ export default function Home() {
 
         {/* AI-PRIORITIZED PAYMENTS QUEUE */}
         <PrioritizedPaymentsTable />
+
+        {/* WHO BENEFITS FROM RECOVERAI */}
+        <WhoBenefits />
 
         {/* BUSINESS VALUE & RECOVERY PIPELINE */}
         <BusinessValue />

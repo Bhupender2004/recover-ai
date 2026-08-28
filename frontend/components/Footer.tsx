@@ -33,6 +33,14 @@ export function Footer() {
               GitHub Repository
             </a>
             <a
+              href="/recoverai-business-value.pdf"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-blue-400 transition-colors flex items-center gap-1"
+            >
+              Business Value (PDF)
+            </a>
+            <a
               href="https://recover-ai-api-dfat.onrender.com/docs"
               target="_blank"
               rel="noreferrer"
